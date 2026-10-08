@@ -1,8 +1,5 @@
 # Bimska — Frontend (GitHub Pages)
 
-Aplikasi bimbingan skripsi UNSIKA Fasilkom. Antarmuka ini statis (HTML/CSS/JS) dan memanggil backend
-**Google Apps Script** (REST API) lewat `fetch()`. Data tersimpan di Google Sheets & Drive milik dosen.
-
 ```
 index.html          ← halaman utama (harus berada di root repository)
 css/style.css       ← gaya
