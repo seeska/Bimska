@@ -6,34 +6,19 @@
   <meta name="theme-color" content="#9F1239">
   <title>Bimska — Bimbingan Skripsi UNSIKA</title>
 
-  <!-- Font: Plus Jakarta Sans + Material Symbols (sesuai DESIGN.md) -->
+  <!-- Percepat koneksi pertama: server API (Apps Script) dan font -->
+  <link rel="preconnect" href="https://script.google.com"><link rel="preconnect" href="https://script.googleusercontent.com" crossorigin>
+  <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <!-- Mulai memanggil server SEKARANG: config + api dimuat lebih dulu (kecil), paralel dengan CSS & font -->
+  <script src="js/config.js?v=2"></script>
+  <script src="js/api.js?v=2"></script>
+  <!-- Font: Plus Jakarta Sans + Material Symbols (sumbu variabel dipangkas agar ringan) -->
   <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-  <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200&display=swap" rel="stylesheet">
-
-  <!-- Tailwind (utilitas tata letak). Warna memakai token CSS di Stylesheet agar mode gelap otomatis. -->
-  <script src="https://cdn.tailwindcss.com"></script>
-  <script>
-    tailwind.config = {
-      theme: { extend: {
-        colors: {
-          canvas: 'rgb(var(--bg-canvas) / <alpha-value>)', card: 'rgb(var(--card) / <alpha-value>)',
-          ink: 'rgb(var(--ink) / <alpha-value>)', ink2: 'rgb(var(--ink2) / <alpha-value>)',
-          line: 'rgb(var(--line) / <alpha-value>)', field: 'rgb(var(--field) / <alpha-value>)',
-          brand: 'rgb(var(--brand-btn) / <alpha-value>)', brandtx: 'rgb(var(--brand-text) / <alpha-value>)',
-          brandp: 'rgb(var(--brand-pastel) / <alpha-value>)', gold: 'rgb(var(--gold) / <alpha-value>)',
-          goldp: 'rgb(var(--gold-pastel) / <alpha-value>)', goldink: 'rgb(var(--gold-ink) / <alpha-value>)',
-          mint: 'rgb(var(--mint) / <alpha-value>)', mintp: 'rgb(var(--mint-pastel) / <alpha-value>)',
-          mintink: 'rgb(var(--mint-ink) / <alpha-value>)', skyp: 'rgb(var(--sky-pastel) / <alpha-value>)',
-          skyink: 'rgb(var(--sky-ink) / <alpha-value>)'
-        },
-        fontFamily: { sans: ['"Plus Jakarta Sans"', 'system-ui', 'sans-serif'] }
-      } }
-    };
-  </script>
+  <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL@24,400..600,0..1&display=block" rel="stylesheet">
 
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='16' fill='%239F1239'/%3E%3Cpath d='M32 14 8 26l24 12 24-12zM16 34v10c0 4 8 8 16 8s16-4 16-8V34l-16 8z' fill='%23fff'/%3E%3C/svg%3E">
   <!-- Naikkan angka ?v= bila Anda memperbarui berkas, agar browser mengambil versi terbaru -->
-  <link rel="stylesheet" href="css/style.css?v=1">
+  <link rel="stylesheet" href="css/style.css?v=2">
 </head>
 <body>
   <!-- Penjaga: tampilkan galat JavaScript di layar (membantu diagnosis) -->
@@ -84,13 +69,13 @@
   <div id="modalRoot"></div>
   <div id="confirmRoot"></div>
   <div id="toastRoot" aria-live="assertive"></div>
+  <div id="jobPill" class="job-pill" role="status" aria-live="polite"></div>
 
-  <!-- Urutan penting: config → api → inti → halaman → aksi (yang terakhir memulai aplikasi) -->
-  <script src="js/config.js?v=1"></script>
-  <script src="js/api.js?v=1"></script>
-  <script src="js/core.js?v=1"></script>
-  <script src="js/pages-utama.js?v=1"></script>
-  <script src="js/pages-bimbingan.js?v=1"></script>
-  <script src="js/aksi.js?v=1"></script>
+  <!-- Urutan penting: swr → inti → halaman → aksi (yang terakhir memulai aplikasi). defer = diunduh paralel, dijalankan berurutan -->
+  <script defer src="js/swr.js?v=2"></script>
+  <script defer src="js/core.js?v=2"></script>
+  <script defer src="js/pages-utama.js?v=2"></script>
+  <script defer src="js/pages-bimbingan.js?v=2"></script>
+  <script defer src="js/aksi.js?v=2"></script>
 </body>
 </html>

@@ -1,30 +1,19 @@
 'use strict';
 
 // ════════ BAGIAN 6: DATA (cache ringan + optimistic UI) ════════
-async function getDash(force) {
-  if (!force && S.dash && Date.now() - S.dashAt < 45000) return S.dash;
-  const d = await apiA('getDashboard', !!force);
-  S.dash = d; S.dashAt = Date.now();
-  const stale = d.role === 'dosen' ? d.sum.stale : d.stale;
-  if (stale && !force) setTimeout(() => refreshDash(true), 60); // pembaruan di belakang layar
-  return d;
-}
+async function getDash(force) { return swr('dash', force ? { force: true, fetch: () => apiA('getDashboard', true) } : {}); }
 async function refreshDash(silent) {
-  try { await getDash(true); if (S.page === 'home' || S.page === 'mahasiswa' || S.page === 'surat' || S.page === 'dokumen') rerender(); if (!silent) toast('Dashboard diperbarui.', 'ok'); }
+  try { await getDash(true); if (!silent) toast('Dashboard diperbarui.', 'ok'); }
   catch (e) { if (!silent) toast(e.message, 'error'); }
 }
-async function getDet(uid, force) {
-  const k = uid || S.user.uid, c = S.det[k];
-  if (!force && c && Date.now() - c.t < 60000) return c.d;
-  const d = await apiA('getStudentDetail', isDosen() ? uid : S.user.uid);
-  S.det[k] = { t: Date.now(), d: d }; return d;
-}
-function invalidate(uid) { if (uid) delete S.det[uid]; else S.det = {}; S.dash = null; S.sesiAll = null; S.antrian = null; }
-/** Terapkan perubahan langsung di layar, sinkronkan ke server, kembalikan bila gagal. */
+function getDet(uid) { return swr('det:' + (uid || S.user.uid)); }
+/** Tandai cache basi & tarik ulang data halaman aktif di belakang layar (layar berubah bila datanya berubah). */
+function invalidate() { markStale(); revalidateCurrent(); }
+/** Terapkan perubahan langsung di layar, sinkronkan ke server di belakang, kembalikan bila gagal. */
 async function optimistic(mutate, call, okMsg) {
   mutate(); rerender();
-  try { const r = await call(); S.dash = null; if (okMsg) toast(okMsg, 'ok'); return r; }
-  catch (e) { if (e.message !== 'SESI_HABIS') toast(e.message, 'error'); invalidate(); rerender(); }
+  try { const r = await call(); markStale(); revalidateCurrent(); if (okMsg) toast(okMsg, 'ok'); return r; }
+  catch (e) { if (e.message !== 'SESI_HABIS') toast(e.message, 'error'); markStale(); revalidateCurrent(true); }
 }
 
 // ════════ BAGIAN 7: HOME ════════

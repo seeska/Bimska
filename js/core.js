@@ -8,7 +8,7 @@
  */
 
 // ════════ BAGIAN 1: STATE & UTILITAS ════════
-const S = { tok: null, user: null, page: 'home', params: {}, nav: 0, busy: 0, dash: null, dashAt: 0, det: {}, fl: { f: 'all', q: '' }, tab: 'tahapan', charts: {}, meta: { totalTahap: 16, ambang: { urgent: 7, tidakAktif: 14 } }, notifUnread: 0, ver: '', seen: {}, poll: null, polling: false, pendingRefresh: false, viewer: null, docCache: {}, fileCache: {}, hist: { n: 10, month: 'all' }, rk: 'belum', bimTab: 'revisi', rvF: 'periksa', badge: { rev: 0, chat: 0 }, stF: { jenis: 'all', status: 'all' }, bTab: 'mendatang', auth: {}, redraw: null, blobUrls: [], pdfLib: null };
+const S = { tok: null, user: null, page: 'home', params: {}, nav: 0, busy: 0, dash: null, dashAt: 0, det: {}, curKeys: null, jobs: 0, fl: { f: 'all', q: '' }, tab: 'tahapan', charts: {}, meta: { totalTahap: 16, ambang: { urgent: 7, tidakAktif: 14 } }, notifUnread: 0, ver: '', seen: {}, poll: null, polling: false, pendingRefresh: false, viewer: null, docCache: {}, fileCache: {}, hist: { n: 10, month: 'all' }, rk: 'belum', bimTab: 'revisi', rvF: 'periksa', badge: { rev: 0, chat: 0 }, stF: { jenis: 'all', status: 'all' }, bTab: 'mendatang', auth: {}, redraw: null, blobUrls: [], pdfLib: null };
 const NB = ['Jan', 'Feb', 'Mar', 'Apr', 'Mei', 'Jun', 'Jul', 'Agu', 'Sep', 'Okt', 'Nov', 'Des'];
 const $ = (s, r) => (r || document).querySelector(s);
 const $$ = (s, r) => Array.from((r || document).querySelectorAll(s));
@@ -107,13 +107,15 @@ const sectionTitle = (t, right) => `<div class="mb-3 flex items-center justify-b
 
 // ════════ BAGIAN 2: API, TOAST, MODAL ════════
 function busy(d) { S.busy = Math.max(0, S.busy + d); $('#loadBar').classList.toggle('on', S.busy > 0); }
+/** Fungsi baca (tidak mengubah data di server). Selain ini dianggap aksi tulis. */
+const READ_FN = { getDashboard: 1, getStudentDetail: 1, getAntrianDokumen: 1, getSesiAll: 1, getThreads: 1, getMedali: 1, listToken: 1, getPengaturan: 1, getNotif: 1, getBootstrap: 1, getDokView: 1, getFileData: 1, getPesan: 1, ping: 1, initApp: 1, batch: 1, bacaNotif: 1, kirimPesan: 1, loginPassword: 1, logout: 1, resetRequest: 1, resetVerify: 1, daftarMahasiswa: 1, cetakProgresPdf: 1, cetakRekapPdf: 1 };
 function apiRaw(opt, fn, args) {
   if (!opt.silent) busy(1);
   const fin = () => { if (!opt.silent) busy(-1); };
   return gasCall(fn, args, { timeout: 45000 }).then(r => {
     fin();
     if (r && r.ver) S.ver = r.ver;      // versi data dari mutasi sendiri → tidak memicu pembaruan ganda
-    if (r && r.success) return r.data;
+    if (r && r.success) { if (!READ_FN[fn]) { markStale(); revalidateCurrent(); } return r.data; }   // aksi tulis → cache basi, tarik ulang di belakang layar
     const m = (r && r.message) || 'Terjadi kesalahan.';
     if (m === 'SESI_HABIS') { forceLogout('Sesi berakhir. Silakan masuk kembali.'); throw new Error(m); }
     throw new Error(m);
@@ -137,6 +139,7 @@ function openModal(html, o) {
 function closeModal() {
   $('#modalRoot').innerHTML = ''; document.body.classList.remove('no-scroll'); S.viewer = null;
   S.blobUrls.forEach(u => URL.revokeObjectURL(u)); S.blobUrls = [];
+  if (S.needRefresh) { S.needRefresh = false; softRefresh(); }          // pembaruan yang tertunda selama dialog terbuka
 }
 const modalHead = t => `<div class="modal-head"><h3>${t}</h3><button class="icon-btn" data-act="closeModal" aria-label="Tutup">${icon('close')}</button></div>`;
 function confirmBox(msg, ok, danger) {
@@ -197,23 +200,23 @@ const NAV = {
 function go(page, params) {
   if (page === 'dokumen') { page = 'bimbingan'; params = Object.assign({ tab: 'revisi' }, params || {}); }          // menu lama digabung ke Bimbingan
   if (page === 'diskusi') { page = 'bimbingan'; params = Object.assign({ tab: 'diskusi' }, params || {}); }
-  S.page = page; S.params = params || {}; const my = ++S.nav;
+  S.page = page; S.params = params || {}; const my = ++S.nav; S.curKeys = new Set();
   if (S.redraw) { S.redraw = null; destroyCharts(); }
   renderNav();
   $('#pageTitle').textContent = TITLES[page] || '';
-  $('#app-container').innerHTML = skeleton();
+  if (!hasData(pageKeys(page, S.params))) $('#app-container').innerHTML = skeleton();   // data sudah di cache → langsung tampil, tanpa skeleton
   window.scrollTo(0, 0);
-  runPage(my);
+  runPage(my); saveSnapSoon();
 }
 function runPage(my) {
   const p = PAGES[S.page]; if (!p) { view(errBox('Halaman "' + S.page + '" belum tersedia.'), my); return; }
   Promise.resolve(p(my)).catch(e => { if (my === S.nav && e.message !== 'SESI_HABIS') $('#app-container').innerHTML = errBox(e.message); });
 }
 /** Render ulang halaman aktif dari cache (tanpa skeleton) — dipakai untuk optimistic UI. */
-function rerender() { const my = ++S.nav; runPage(my); }
+function rerender() { const my = ++S.nav; S._quiet = my; runPage(my); }
 function view(html, my) {
   if (my !== undefined && my !== S.nav) return false;
-  $('#app-container').innerHTML = `<div class="fade-in">${html}</div>`; return true;
+  $('#app-container').innerHTML = `<div class="${S._quiet === S.nav ? '' : 'fade-in'}">${html}</div>`; return true;
 }
 function badgeFor(id) { return id === 'bimbingan' ? (S.badge.rev + S.badge.chat) : 0; }
 function renderNav() {
@@ -240,7 +243,7 @@ function showShell() {
 const LOGO = `<div class="mx-auto flex h-16 w-16 items-center justify-center rounded-3xl text-white shadow-lg" style="background:linear-gradient(135deg,rgb(var(--brand-btn)),rgb(var(--gold)))">${icon('school', 'ms-fill !text-4xl')}</div>`;
 function forceLogout(msg) {
   stopPolling();
-  S.tok = null; S.user = null; S.dash = null; S.det = {};
+  S.tok = null; S.user = null; clearData(); clearSnap();
   try { sessionStorage.removeItem('bim_tok'); } catch (e) { /* abaikan */ }
   renderAuth(msg);
 }
@@ -282,26 +285,46 @@ function authBody(tab, step) {
   }
   $('#authBody').innerHTML = h;
 }
+function applyInit(pre) {
+  const b = pre.boot;
+  S.user = b.user; S.meta = b; S.notifUnread = b.notifUnread; S.ver = b.ver; S.badge = b.badge || { rev: 0, chat: 0 }; S.seen = {}; (b.unreadIds || []).forEach(id => S.seen[id] = 1);
+  putData('dash', pre.dash, true);
+  const stale = pre.dash.role === 'dosen' ? pre.dash.sum.stale : pre.dash.stale;
+  if (stale) setTimeout(() => refreshDash(true), 400);
+  updateNotifDot(); renderNav(); saveSnapSoon();
+}
 async function enterApp(tok, pre) {
   S.tok = tok; try { sessionStorage.setItem('bim_tok', tok); } catch (e) { /* abaikan */ }
   if (!pre) { pre = await api('initApp', tok); if (!pre || !pre.ok) throw new Error('Sesi tidak valid.'); S.tok = pre.token || tok; try { sessionStorage.setItem('bim_tok', S.tok); } catch (e) { /* abaikan */ } }
-  const b = pre.boot;
-  S.user = b.user; S.meta = b; S.notifUnread = b.notifUnread; S.ver = b.ver; S.badge = b.badge || { rev: 0, chat: 0 }; S.seen = {}; (b.unreadIds || []).forEach(id => S.seen[id] = 1);
-  S.dash = pre.dash; S.dashAt = Date.now(); S.det = {}; S.sesiAll = null;
+  clearData();                                  // data pengguna sebelumnya tidak boleh terbawa
+  applyInit(pre);
   showShell(); startPolling(); go('home');
-  const stale = pre.dash.role === 'dosen' ? pre.dash.sum.stale : pre.dash.stale;
-  if (stale) setTimeout(() => refreshDash(true), 400);
+  setTimeout(prefetchAll, 60);                 // panaskan cache halaman lain setelah layar pertama tampil
 }
 async function boot() {
   window.__bimskaBooted = true;
   initTheme();
   if (!GAS_OK) { __showFatal('GAS_URL belum diisi. Buka berkas js/config.js, tempel URL Web App Apps Script (berakhiran /exec), simpan, lalu push ulang ke GitHub.'); return; }
-  $('#app-container').innerHTML = '<div class="px-4 pt-16 text-center text-ink2"><span class="spinner"></span><p class="mt-3 font-semibold">Menyambungkan ke server…</p></div>';
+  // Muat-ulang tab yang sama: langsung tampilkan snapshot terakhir (0 ms), server memvalidasi sesudahnya.
+  let painted = false; const snap = loadSnap();
   try {
-    const r = await (window.__initP || Promise.resolve(null));   // dimulai paralel di Index (menghemat satu putaran ke server)
-    if (r && r.success && r.data && r.data.ok) { await enterApp(r.data.token, r.data); return; }
+    if (snap && snap.tok && snap.user && snap.tok === sessionStorage.getItem('bim_tok')) {
+      S.tok = snap.tok; S.user = snap.user; S.meta = snap.meta || S.meta; S.badge = snap.badge || S.badge; S.notifUnread = snap.notif || 0; S.ver = snap.ver || '';
+      Object.keys(snap.cache || {}).forEach(k => { DC[k] = { v: snap.cache[k], t: 0, p: null }; keepPointers(k, snap.cache[k]); });
+      showShell(); go(snap.page || 'home', snap.params || {}); painted = true;
+    }
+  } catch (e) { painted = false; }
+  if (!painted) $('#app-container').innerHTML = '<div class="px-4 pt-16 text-center text-ink2"><span class="spinner"></span><p class="mt-3 font-semibold">Menyambungkan ke server…</p></div>';
+  try {
+    const r = await (window.__initP || Promise.resolve(null));   // dimulai paralel di api.js (menghemat satu putaran ke server)
+    if (r && r.success && r.data && r.data.ok) {
+      if (painted) { S.tok = r.data.token || S.tok; try { sessionStorage.setItem('bim_tok', S.tok); } catch (e) { /* abaikan */ } applyInit(r.data); startPolling(); setTimeout(prefetchAll, 60); }
+      else await enterApp(r.data.token, r.data);
+      return;
+    }
   } catch (e) { /* lanjut ke formulir masuk */ }
-  renderAuth();
+  if (painted) forceLogout('Sesi berakhir. Silakan masuk kembali.');
+  else { try { sessionStorage.removeItem('bim_tok'); } catch (e) { /* abaikan */ } clearSnap(); renderAuth(); }   // token tidak valid: bersihkan sisa sesi
 }
 // ════════ PEMANTAU REAL-TIME (ping ringan tiap 15 dtk selagi tab terlihat) ════════
 function startPolling() {
@@ -326,12 +349,10 @@ async function pollTick() {
   finally { S.polling = false; }
 }
 function refreshAfterChange() {
-  S.dash = null; S.det = {}; S.sesiAll = null;
-  const ae = document.activeElement;
-  if (ae && /^(INPUT|TEXTAREA|SELECT)$/.test(ae.tagName)) { S.pendingRefresh = true; return; }   // jangan ganggu yang sedang mengetik
-  if ($('#modalRoot .modal-card')) { if (S.viewer && S.viewer.dokId) refreshViewer(); return; }
-  if (S.page === 'bimbingan' && (S.params.tab || S.bimTab) === 'diskusi') { if (S.threadUid && $('#msgs')) loadMsgs(S.threadUid); else rerender(); return; }
-  if (['home', 'mahasiswa', 'surat', 'bimbingan', 'dokumen', 'detail', 'tahapan', 'medali', 'rekap', 'profil'].indexOf(S.page) >= 0) rerender();
+  markStale();                                   // data berubah di server → tandai semua cache basi
+  if (S.viewer && S.viewer.dokId && $('#modalRoot .modal-card')) refreshViewer();
+  if (S.page === 'bimbingan' && (S.params.tab || S.bimTab) === 'diskusi' && S.threadUid && $('#msgs')) loadMsgs(S.threadUid);
+  revalidateCurrent();                           // tarik ulang data halaman aktif; layar berubah hanya jika datanya berubah
 }
-document.addEventListener('focusout', () => { if (S.pendingRefresh) setTimeout(() => { if (S.pendingRefresh && !/^(INPUT|TEXTAREA|SELECT)$/.test((document.activeElement || {}).tagName || '')) { S.pendingRefresh = false; refreshAfterChange(); } }, 400); });
+document.addEventListener('focusout', () => { if (S.pendingRefresh) setTimeout(() => { if (S.pendingRefresh && !/^(INPUT|TEXTAREA|SELECT)$/.test((document.activeElement || {}).tagName || '')) { S.pendingRefresh = false; softRefresh(); } }, 400); });
 document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') pollTick(); });

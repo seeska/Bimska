@@ -129,16 +129,21 @@ const FORMS = {
   async upST(f, fd, b) {
     await safe(withBtn(b, async () => {
       const file = await readFile(f.querySelector('input[type=file]'));
-      await apiA('uploadSuratTugas', { uid: fd.get('uid'), jenis: fd.get('jenis'), mulai: fd.get('mulai'), berakhir: fd.get('berakhir'), file: file });
-      closeModal(); invalidate(); toast('Surat tugas berhasil diunggah.', 'ok'); rerender();
+      const payload = { uid: fd.get('uid'), jenis: fd.get('jenis'), mulai: fd.get('mulai'), berakhir: fd.get('berakhir'), file: file };
+      closeModal();
+      runJob('Mengunggah surat tugas…', () => apiA('uploadSuratTugas', payload), () => { invalidate(); toast('Surat tugas berhasil diunggah.', 'ok'); });   // UI langsung bebas
     }));
   },
   async upDok(f, fd, b) {
     await safe(withBtn(b, async () => {
       const ids = fd.getAll('tahap_ids'); if (!ids.length) throw new Error('Pilih minimal satu bab/tahap.');
       const file = await readFile(f.querySelector('input[type=file]'));
-      const r = await apiA('uploadDokumen', { uid: fd.get('uid'), tipe: fd.get('tipe'), tahap_ids: ids, catatan: fd.get('catatan'), fixed: fd.getAll('fixed'), file: file });
-      closeModal(); invalidate(); S.docCache = {}; toast((r.n > 1 ? r.label + ' · ' : '') + 'Versi ' + r.versi + ' diunggah' + (r.fixed ? ` · ${r.fixed} catatan menunggu verifikasi` : '') + (r.carried ? ` · ${r.carried} catatan terbawa` : '') + '.', 'ok'); rerender();
+      const payload = { uid: fd.get('uid'), tipe: fd.get('tipe'), tahap_ids: ids, catatan: fd.get('catatan'), fixed: fd.getAll('fixed'), file: file };
+      closeModal();
+      runJob('Mengunggah dokumen…', () => apiA('uploadDokumen', payload), r => {            // UI langsung bebas; berkas terkirim di belakang
+        S.docCache = {}; invalidate();
+        toast((r.n > 1 ? r.label + ' · ' : '') + 'Versi ' + r.versi + ' terkirim' + (r.fixed ? ` · ${r.fixed} catatan menunggu verifikasi` : '') + (r.carried ? ` · ${r.carried} catatan terbawa` : '') + '.', 'ok');
+      });
     }));
   },
   async vtSave(f, fd, b) {
@@ -160,16 +165,21 @@ const FORMS = {
   async jadwal(f, fd, b) {
     const id = f.dataset.id;
     await safe(withBtn(b, async () => {
-      const r = await apiA('setJadwalTahap', id, String(fd.get('tanggal')), String(fd.get('ket') || ''));
-      invalidate(); closeModal(); toast('Jadwal tersimpan: ' + r.hari + ', ' + tgl(r.tgl) + '.', 'ok'); rerender();
+      const tanggal = String(fd.get('tanggal')), ket = String(fd.get('ket') || ''), hari = ['Minggu', 'Senin', 'Selasa', 'Rabu', 'Kamis', 'Jumat', 'Sabtu'][new Date(tanggal + 'T00:00:00').getDay()];
+      const uidK = isDosen() ? S.params.uid : S.user.uid, dd = S.det[uidK] && S.det[uidK].d, tt = dd && dd.tahapan.find(x => x.id === id);
+      if (tt) { tt.acara = { tgl: tanggal, hari: hari, oleh: S.user.role, ket: ket }; }          // tampil seketika
+      closeModal(); rerender(); toast('Jadwal tersimpan: ' + hari + ', ' + tgl(tanggal) + '.', 'ok');
+      try { await apiA('setJadwalTahap', id, tanggal, ket); invalidate(); }
+      catch (e) { if (e.message !== 'SESI_HABIS') toast(e.message, 'error'); markStale(); revalidateCurrent(true); }
     }));
   },
   async publikasi(f, fd, b) {
     await safe(withBtn(b, async () => {
       const inp = f.querySelector('input[type=file]'); let file = null;
       if (inp && inp.files && inp.files[0]) file = await readFile(inp);
-      await apiA('simpanPublikasi', { uid: f.dataset.uid, jurnal: fd.get('jurnal'), judul: fd.get('judul'), status: fd.get('status'), link: fd.get('link'), catatan: fd.get('catatan'), file: file });
-      invalidate(); closeModal(); toast('Data publikasi tersimpan.', 'ok'); rerender();
+      const payload = { uid: f.dataset.uid, jurnal: fd.get('jurnal'), judul: fd.get('judul'), status: fd.get('status'), link: fd.get('link'), catatan: fd.get('catatan'), file: file };
+      closeModal();
+      runJob(file ? 'Mengunggah LoA & data publikasi…' : 'Menyimpan data publikasi…', () => apiA('simpanPublikasi', payload), () => { invalidate(); toast('Data publikasi tersimpan.', 'ok'); });
     }));
   },
   async bersihkan(f, fd, b) {
@@ -180,7 +190,7 @@ const FORMS = {
     const isi = String(fd.get('isi')).trim(); if (!isi) return; const uid = f.dataset.uid;
     f.reset(); const el = $('#msgs');
     if (el) { el.insertAdjacentHTML('beforeend', `<div class="flex"><div class="bubble me">${esc(isi)}<small>mengirim…</small></div></div>`); el.scrollTop = el.scrollHeight; }
-    try { await apiA('kirimPesan', uid, isi); S.dash = null; await loadMsgs(uid, ''); } catch (e) { toast(e.message, 'error'); loadMsgs(uid, ''); }
+    try { await apiA('kirimPesan', uid, isi); markStale('dash'); markStale('threads'); await loadMsgs(uid, ''); } catch (e) { toast(e.message, 'error'); loadMsgs(uid, ''); }
   },
   async newToken(f, fd, b) {
     await safe(withBtn(b, async () => {
@@ -241,9 +251,10 @@ const ACT = {
   cfYes: () => S._cf && S._cf(true), cfNo: () => S._cf && S._cf(false),
   toggleTheme: () => { setTheme(document.documentElement.getAttribute('data-theme') === 'dark' ? 'light' : 'dark'); if (S.page === 'profil') rerender(); },
   openNotif: () => openNotif(),
-  readAll: async () => { await safe(apiA('bacaNotif', 'all').then(r => { S.notifUnread = r.unread; updateNotifDot(); openNotif(); })); },
+  readAll: async () => { if (DC.notif && DC.notif.v) { DC.notif.v.forEach(n => n.baca = true); renderNotifList(DC.notif.v); } S.notifUnread = 0; updateNotifDot(); try { await apiA('bacaNotif', 'all'); } catch (e) { markStale('notif'); } },
   notifGo: async (d) => {
-    try { const r = await apiA('bacaNotif', d.id); S.notifUnread = r.unread; updateNotifDot(); } catch (e) { /* abaikan */ }
+    if (DC.notif && DC.notif.v) { const nn = DC.notif.v.find(x => x.id === d.id); if (nn && !nn.baca) { nn.baca = true; S.notifUnread = Math.max(0, S.notifUnread - 1); updateNotifDot(); } }
+    apiA('bacaNotif', d.id).then(r => { S.notifUnread = r.unread; updateNotifDot(); }).catch(() => { /* abaikan */ });   // tidak menunggu server
     closeModal();
     if (['dokumen', 'revisi', 'komentar'].indexOf(d.j) >= 0 && d.ref) { openDocViewer(d.ref); return; }
     if (d.j === 'publikasi') { if (isDosen() && d.ref) go('detail', { uid: d.ref, tab: 'tahapan' }); else go('tahapan'); return; }
@@ -269,7 +280,7 @@ const ACT = {
   openPublikasi: d => safe(openPublikasi(d.uid)),
   viewLoa: d => openPreview('loa', d.id, 'Letter of Acceptance (LoA)'),
   histMore: () => { S.hist.n += 10; rerender(); },
-  delSesi: async d => { if (await confirmBox('Hapus sesi ini dari riwayat? Tindakan ini tidak dapat dibatalkan.', 'Hapus', true)) optimistic(() => { const p = x => x.id !== d.id; S.sesiAll = (S.sesiAll || []).filter(p); Object.keys(S.det).forEach(k => S.det[k].d.sesi = S.det[k].d.sesi.filter(p)); }, () => apiA('hapusSesi', d.id), 'Sesi dihapus.'); },
+  delSesi: async d => { if (await confirmBox('Hapus sesi ini dari riwayat? Tindakan ini tidak dapat dibatalkan.', 'Hapus', true)) optimistic(() => { const arr = S.sesiAll || []; for (let i = arr.length - 1; i >= 0; i--) if (arr[i].id === d.id) arr.splice(i, 1); Object.keys(S.det).forEach(k => S.det[k].d.sesi = S.det[k].d.sesi.filter(x => x.id !== d.id)); }, () => apiA('hapusSesi', d.id), 'Sesi dihapus.'); },
   openBersihkan: () => openBersihkan(),
   rekapFilter: d => { S.rk = d.f; rerender(); },
   rekapPdf: async () => { await safe(apiA('cetakProgresPdf', S.rk).then(r => { downloadFile(r); toast('PDF rekap progres diunduh.', 'ok'); })); },
@@ -311,6 +322,8 @@ const ACT = {
   vFocus: () => { const v = S.viewer; if (v) { v.focus = !v.focus; renderViewer(); } },
   vFs: () => { const v = S.viewer; if (v) { v.fs = v.fs >= 20 ? 15 : v.fs + 2; renderViewer(); } },
   pbYes: () => { const ids = $$('#confirmRoot input[name=pb]:checked').map(i => i.value); if (!ids.length) { toast('Pilih minimal satu bab.', 'error'); return; } if (S._cf) S._cf(ids); },
+  jobRetry: () => { if (S._jobRetry) S._jobRetry(); },
+  jobClose: () => { const el = $('#jobPill'); if (el) el.className = 'job-pill'; },
   vtKembali: () => vtKembali(),
   vtSelesai: () => vtSelesai()
 };
@@ -352,4 +365,14 @@ document.addEventListener('keydown', e => {
   if ((e.key === 'Enter' || e.key === ' ') && e.target.matches && e.target.matches('[role=button][data-act]')) { e.preventDefault(); e.target.click(); }
 });
 window.__bimskaLoaded = true;
+// Prefetch: saat kursor/jari menyentuh menu atau kartu mahasiswa, data tujuan dipanaskan sebelum diklik.
+function warmFrom(e) {
+  if (!S.user) return; const t = e.target.closest && e.target.closest('[data-act=nav],[data-act=goBim],[data-act=detail],.bnav,.navbtn'); if (!t) return;
+  const d = t.dataset || {};
+  if (d.act === 'nav' && d.page) prefetchPage(d.page, {});
+  else if (d.act === 'goBim') prefetchPage('bimbingan', { tab: d.tab });
+  else if (d.act === 'detail' && d.uid) pull('det:' + d.uid, {}, false);
+}
+document.addEventListener('pointerover', warmFrom, { passive: true });
+document.addEventListener('touchstart', warmFrom, { passive: true });
 if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot); else boot();

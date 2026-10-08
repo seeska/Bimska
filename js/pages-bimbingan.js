@@ -84,8 +84,7 @@ function antrianCard(x) {
     <button class="btn ${x.status === 'Menunggu diperiksa' ? 'btn-primary' : 'btn-soft'} btn-sm" data-act="openDoc" data-id="${x.dok}">${icon(x.status === 'Menunggu diperiksa' ? 'rate_review' : 'visibility', '!text-base')} ${x.status === 'Menunggu diperiksa' ? 'Periksa' : x.status === 'Sedang diperiksa' ? 'Lanjutkan' : 'Buka'}</button></div>`;
 }
 async function boardDosen() {
-  let rows = S.antrian;
-  if (!rows || Date.now() - (S.antrianAt || 0) > 20000) { rows = await apiA('getAntrianDokumen'); S.antrian = rows; S.antrianAt = Date.now(); }
+  const rows = await swr('antrian');
   const f = RVF[S.rvF] ? S.rvF : 'periksa', q = (S.rvQ || '').toLowerCase();
   const list = rows.filter(RVF[f][1]).filter(x => !q || (x.nama + ' ' + x.npm + ' ' + x.tahap).toLowerCase().indexOf(q) >= 0).sort(RVSORT[f]);
   const n = k => rows.filter(RVF[k][1]).length;
@@ -315,14 +314,22 @@ async function vtKembali() {
   const v = S.viewer; if (!v) return;
   const n = v.tasks.filter(t => !t.dibawa && t.status === 'Belum direvisi').length;
   if (!(await confirmBox(n ? `Kirim ${n} catatan ke mahasiswa dan kembalikan dokumen ini? Mahasiswa akan diberi tahu.` : 'Kembalikan dokumen ke mahasiswa?', 'Kembalikan'))) return;
-  await safe(apiA('kembalikanDok', v.dokId).then(r => { v.dok.status = 'Dikembalikan'; v.tasks.forEach(t => { t.dirilis = true; }); invalidate(); renderViewer(); toast('Dokumen dikembalikan ke mahasiswa (' + r.n + ' catatan).', 'ok'); }));
+  const was = { st: v.dok.status, rel: v.tasks.map(t => t.dirilis) };
+  v.dok.status = 'Dikembalikan'; v.tasks.forEach(t => { t.dirilis = true; }); renderViewer(); toast('Dokumen dikembalikan ke mahasiswa.', 'ok');   // tampil seketika
+  try { await apiA('kembalikanDok', v.dokId); invalidate(); }
+  catch (e) { if (S.viewer === v) { v.dok.status = was.st; v.tasks.forEach((t, i) => { t.dirilis = was.rel[i]; }); renderViewer(); } if (e.message !== 'SESI_HABIS') toast(e.message, 'error'); }
 }
 async function vtSelesai() {
   const v = S.viewer; if (!v) return;
   const list = v.dok.tahap_list || []; let pil = null;
   if (list.length > 1) { pil = await pilihBab(list); if (!pil) return; }
   else if (!(await confirmBox('Tandai dokumen ini selesai? Bila bab ini punya tahapan, tahapan ikut ditandai selesai otomatis dan mahasiswa diberi tahu.', 'Tandai selesai'))) return;
-  await safe(apiA('selesaiDok', v.dokId, pil || []).then(r => { v.dok.status = 'Selesai'; invalidate(); renderViewer(); toast(r.tahapSelesai ? 'Dokumen selesai · ' + r.n + ' tahapan ditandai selesai otomatis.' + (r.sisa ? ' ' + r.sisa + ' bab masih perlu revisi.' : '') : 'Dokumen dinyatakan selesai.', 'ok'); }));
+  const was = v.dok.status;
+  const pend = v.tasks.filter(t => !t.dibawa && t.status !== 'Disetujui').length;
+  if (pend) { toast('Masih ada ' + pend + ' catatan yang belum disetujui. Setujui, hapus, atau kembalikan dokumen ke mahasiswa.', 'error'); return; }
+  v.dok.status = 'Selesai'; renderViewer(); toast('Dokumen dinyatakan selesai. Tahapan diperbarui otomatis.', 'ok');   // tampil seketika
+  try { await apiA('selesaiDok', v.dokId, pil || []); invalidate(); }
+  catch (e) { if (S.viewer === v) { v.dok.status = was; renderViewer(); } if (e.message !== 'SESI_HABIS') toast(e.message, 'error'); }
 }
 async function openDocViewer(dokId, focusId) {
   S.viewer = { dokId: dokId, mode: 'text', filter: 'all', sel: null, composer: false, cAnchor: null, vTab: 'doc', tasks: [], html: '', note: '', file: null, dok: { status: '' }, fs: 16, focus: false };
@@ -335,7 +342,7 @@ async function openDocViewer(dokId, focusId) {
     if (f) { S.fileCache[dokId] = f; const ks = Object.keys(S.fileCache); if (ks.length > 3) delete S.fileCache[ks[0]]; S.cur = { f: f }; try { S.viewer.html = await docHtml(dokId, f); } catch (e) { S.viewer.note = e.message; } }
     else S.viewer.note = 'Berkas tidak tersedia (mungkin data contoh).';
     if (!S.viewer || S.viewer.dokId !== dokId || !$('#modalRoot .modal-card')) return;
-    if (vw.dok.status === 'Sedang diperiksa') S.dash = null;      // status berubah karena dosen membuka dokumen
+    if (vw.dok.status === 'Sedang diperiksa') markStale();      // status berubah karena dosen membuka dokumen
     renderViewer();
     if (focusId) setTimeout(() => { goMark(focusId); flash($('#tc-' + focusId)); }, 300);
   } catch (e) { closeModal(); S.viewer = null; if (e.message !== 'SESI_HABIS') toast(e.message, 'error'); }
@@ -398,8 +405,7 @@ function hadirOptimistic(id) {
 // ════════ BIMBINGAN: Revisi Dokumen · Online (Meet) · Diskusi ════════
 async function onlineBody() {
   if (isDosen()) {
-    let list = S.sesiAll;
-    if (!list || Date.now() - (S.sesiAt || 0) > 30000) { list = await apiA('getSesiAll'); S.sesiAll = list; S.sesiAt = Date.now(); }
+    const list = await swr('sesi');
     return `<div class="mb-3 flex flex-wrap items-center justify-between gap-2"><p class="text-sm text-ink2">Jadwal & kehadiran bimbingan tatap muka / Google Meet.</p><div class="flex flex-wrap gap-2"><button class="btn btn-ghost btn-sm" data-act="openRekap">${icon('print', '!text-base')} Cetak catatan</button><button class="btn btn-ghost btn-sm" data-act="openBersihkan">${icon('cleaning_services', '!text-base')} Bersihkan</button><button class="btn btn-primary btn-sm" data-act="openKelas">${icon('add_circle', '!text-base')} Buka kelas</button></div></div>${sesiList(list, true, true)}`;
   }
   const d = await getDet();
@@ -407,7 +413,7 @@ async function onlineBody() {
 }
 async function diskusiBody() {
   if (!isDosen()) return '<div id="threadBox"></div>';
-  const th = await apiA('getThreads'), uid = S.params.uid;
+  const th = await swr('threads'), uid = S.params.uid;
   return `<div class="grid gap-4 md:grid-cols-[320px_1fr]"><div class="${uid ? 'hide-m' : ''} space-y-2">${th.length ? th.map(t => `<button class="card card-hover flex w-full items-center gap-3 p-3 text-left ${t.uid === uid ? '!border-brandtx' : ''}" data-act="openThread" data-uid="${t.uid}">${avatar(t, 42)}<div class="min-w-0 flex-1"><b class="clamp1 block">${esc(t.nama)}</b><span class="clamp1 block text-xs text-ink2">${esc(t.last || 'Belum ada pesan')}</span></div>${t.unread ? `<span class="chip chip-rose">${t.unread}</span>` : ''}</button>`).join('') : `<div class="card">${empty('chat', 'Belum ada mahasiswa')}</div>`}</div>
     <div class="${uid ? '' : 'hide-m'}">${uid ? `<button class="btn btn-ghost btn-sm mb-2 md:hidden" data-act="bimTab" data-t="diskusi">${icon('arrow_back', '!text-base')} Daftar</button><div id="threadBox"></div>` : `<div class="card hide-m">${empty('forum', 'Pilih percakapan', 'Pilih mahasiswa di sebelah kiri.')}</div>`}</div></div>`;
 }
@@ -421,7 +427,7 @@ PAGES.bimbingan = async function (my) {
   if (tab === 'diskusi') { const uid = isDosen() ? S.params.uid : S.user.uid; if (uid) mountThread(uid); }
 };
 PAGES.token = async function (my) {
-  const list = await apiA('listToken'); if (my !== S.nav) return;
+  const list = await swr('token'); if (my !== S.nav) return;
   const SC = { aktif: ['mint', 'Aktif'], sebagian: ['sky', 'Sebagian terpakai'], habis: ['slate', 'Kuota habis'], kedaluwarsa: ['rose', 'Kedaluwarsa'] };
   view(`<section class="px-4 pt-4 md:pt-6">${sectionTitle('Kelola token pendaftaran')}<div class="card mb-4 p-4"><p class="mb-3 text-sm text-ink2">Mahasiswa mendaftar <b>sekali</b> memakai token, lalu membuat kata sandi sendiri. Satu token dapat dipakai beberapa mahasiswa (kuota) dan diberi masa berlaku.</p>
     <form class="grid gap-3 sm:grid-cols-2 lg:grid-cols-[1.4fr_.7fr_.9fr_auto]" data-form="newToken"><div><label class="label" for="tCat">Catatan</label><input id="tCat" class="input" name="catatan" maxlength="80" placeholder="Mis. Angkatan 2021"></div><div><label class="label" for="tKuota">Kuota mahasiswa</label><input id="tKuota" class="input" name="kuota" type="number" min="1" max="100" value="1" required></div><div><label class="label" for="tHari">Masa berlaku</label><select id="tHari" class="input" name="hari"><option value="0">Tanpa batas</option><option value="1">1 hari</option><option value="3">3 hari</option><option value="7" selected>7 hari</option><option value="14">14 hari</option><option value="30">30 hari</option><option value="90">90 hari</option></select></div><div class="flex items-end"><button class="btn btn-primary w-full" type="submit">${icon('add_circle')} Buat token</button></div></form></div>
@@ -442,7 +448,7 @@ async function loadMsgs(uid) {
     const me = S.user.role;
     el.innerHTML = r.pesan.length ? r.pesan.map(m => { const mine = m.dari === me, dos = m.dari === 'dosen';
       return `<div class="flex ${mine ? 'justify-end' : ''}"><div class="msgwrap ${mine ? 'me' : ''}"><p class="mb-1 flex ${mine ? 'justify-end' : ''} flex-wrap items-center gap-1.5 text-[11px] font-bold"><span class="chip ${dos ? 'chip-rose' : 'chip-sky'}">${icon(dos ? 'school' : 'person')}${esc(m.nama)} · ${dos ? 'Dosen' : 'Mahasiswa'}</span><span class="font-medium text-ink2">${tglJam(m.tanggal)}${m.baru ? ' · baru' : ''}</span></p><div class="bubble ${dos ? 'dosen' : 'mhs'} ${mine ? 'me' : ''}">${esc(m.isi)}</div></div></div>`; }).join('') : empty('chat_bubble', 'Belum ada pesan', 'Mulai percakapan singkat di sini.');
-    el.scrollTop = el.scrollHeight; S.dash = null;
+    el.scrollTop = el.scrollHeight; markStale('dash');
   } catch (e) { if (e.message !== 'SESI_HABIS') toast(e.message, 'error'); }
 }
 
@@ -453,7 +459,7 @@ function medalCatalog(unlocked, allOn) {
     return `<div class="medal-cell">${medalIcon(entry, has, 'lg')}<span>${esc(m.n)}</span>${m.t && has && !allOn ? `<span class="tier-tag t${best[id]}">${TIER[best[id]]}</span>` : m.t && !has ? '<span class="font-medium text-ink2">3 tingkat</span>' : ''}</div>`; }).join('')}</div>`;
 }
 PAGES.medali = async function (my) {
-  const d = await apiA('getMedali'); if (my !== S.nav) return;
+  const d = await swr('medali'); if (my !== S.nav) return;
   const r = d.ranking, top = r.slice(0, 3), podium = [top[1], top[0], top[2]].filter(Boolean), mine = r.find(x => x.uid === d.me), A = d.aturan || {};
   const me = mine ? { xp: mine.xp, level: d.level || mine.level || null, xpDetail: d.detail || {}, streak: d.streak, lencana: mine.lencana } : null;
   const ladder = idx => `<div class="lv-ladder">${d.levels.map((l, i) => `<div class="lv-step ${i < idx ? 'done' : i === idx ? 'cur' : ''}"><span class="lv-dot">${icon(LV_ICON[i], i <= idx ? 'ms-fill' : '')}</span><br>${esc(l.nama)}<br><span class="font-medium">${l.xp} XP</span></div>`).join('')}</div>`;
@@ -486,7 +492,7 @@ function rekapCsvText(sum) {
 
 // ════════ BAGIAN 17: TOKEN, PENGATURAN, PROFIL ════════
 PAGES.pengaturan = async function (my) {
-  const p = await apiA('getPengaturan'); if (my !== S.nav) return;
+  const p = await swr('pengaturan'); if (my !== S.nav) return;
   const n = (id, l, v, h, mn, mx) => `<div><label class="label" for="${id}">${l}</label><input id="${id}" name="${id}" type="number" min="${mn}" max="${mx}" class="input" value="${esc(v)}" required>${h ? `<p class="help">${h}</p>` : ''}</div>`;
   view(`<section class="px-4 pt-4 md:pt-6">${sectionTitle('Pengaturan')}<form data-form="saveSetting" class="space-y-4">
     <div class="card space-y-3 p-4"><p class="font-extrabold">Ambang peringatan</p><div class="grid gap-3 sm:grid-cols-2">${n('ambang_urgent', 'Surat tugas segera habis (hari)', p.ambang_urgent, 'Banner, notifikasi, dan email harian muncul sejak sisa hari ini.', 1, 60)}${n('ambang_tidak_aktif', 'Dianggap pasif setelah (hari)', p.ambang_tidak_aktif, 'Memicu kutipan semangat otomatis, maksimal sekali per periode.', 3, 90)}</div></div>
@@ -513,11 +519,15 @@ PAGES.profil = async function (my) {
 // ════════ BAGIAN 18: NOTIFIKASI ════════
 const NOTIF_GO = { surat_tugas: 'surat', dokumen: 'dokumen', revisi: 'dokumen', komentar: 'dokumen', bimbingan: 'bimbingan', diskusi: 'diskusi', medali: 'medali', tahapan: 'home', semangat: 'home', pendaftaran: 'mahasiswa', publikasi: 'tahapan', sistem: 'profil' };
 const NOTIF_ICON = { surat_tugas: 'assignment', dokumen: 'description', revisi: 'edit_note', komentar: 'comment', bimbingan: 'forum', diskusi: 'chat', medali: 'military_tech', tahapan: 'flag', semangat: 'volunteer_activism', pendaftaran: 'person_add', publikasi: 'menu_book' };
-async function openNotif() {
-  openModal(`${modalHead('Notifikasi')}<div class="skel" style="height:200px"></div>`, { noFocus: true });
-  try {
-    const list = await apiA('getNotif'); if (!$('#modalRoot .modal-card')) return;
-    $('#modalRoot .modal-card').innerHTML = `${modalHead('Notifikasi')}<div class="mb-3 flex justify-end"><button class="btn btn-soft btn-sm" data-act="readAll">${icon('done_all', '!text-base')} Tandai semua dibaca</button></div>
+function renderNotifList(list) {
+  const card = $('#modalRoot .modal-card'); if (!card) return;
+  card.innerHTML = `${modalHead('Notifikasi')}<div class="mb-3 flex justify-end"><button class="btn btn-soft btn-sm" data-act="readAll">${icon('done_all', '!text-base')} Tandai semua dibaca</button></div>
       <div class="space-y-2">${list.length ? list.map(n => `<button class="check w-full text-left ${n.baca ? '' : '!border-brandtx'}" data-act="notifGo" data-id="${n.id}" data-j="${n.jenis}" data-ref="${esc(n.ref)}">${icon(NOTIF_ICON[n.jenis] || 'notifications', 'text-brandtx')}<span class="min-w-0 flex-1"><span class="block text-sm ${n.baca ? '' : 'font-bold'}">${esc(n.isi)}</span><span class="text-[11px] text-ink2">${lalu(n.tanggal)}</span></span>${n.baca ? '' : '<span class="pulse-dot text-brandtx"></span>'}</button>`).join('') : empty('notifications_off', 'Belum ada notifikasi')}</div>`;
-  } catch (e) { closeModal(); toast(e.message, 'error'); }
+}
+async function openNotif() {
+  const cached = DC.notif && DC.notif.v;
+  openModal(cached ? `${modalHead('Notifikasi')}` : `${modalHead('Notifikasi')}<div class="skel" style="height:200px"></div>`, { noFocus: true });
+  if (cached) renderNotifList(cached);                          // tampil seketika dari cache
+  try { const list = await pull('notif', {}, true); if ($('#modalRoot .modal-card') && !S.viewer) renderNotifList(list); }
+  catch (e) { if (!cached) { closeModal(); toast(e.message, 'error'); } }
 }
